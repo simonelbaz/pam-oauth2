@@ -4,6 +4,8 @@
 #include <curl/curl.h>
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
 #include "cJSON.h"
 
 struct response {
@@ -17,6 +19,17 @@ struct check_tokens {
     const char *value;
     int value_len;
     int match;
+};
+
+struct st_authbearer {
+    char *a;
+    size_t a_len;
+    char *host;
+    size_t host_len;
+    char *port;
+    size_t port_len;
+    char *token;
+    size_t token_len;
 };
 
 static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r) {
@@ -37,10 +50,12 @@ static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r
     return data_size;
 }
 
+/*
 static int skip_object(const jsmntok_t *t, const int count) {
     int i;
-    if (count <= 0) return 0; /* should not happen */
+    if (count <= 0) return 0; *//* should not happen */
 
+    /*
     if (t->type == JSMN_PRIMITIVE || t->type == JSMN_STRING) {
         return 1;
     } else if (t->type == JSMN_OBJECT) {
@@ -57,21 +72,25 @@ static int skip_object(const jsmntok_t *t, const int count) {
         return ret;
     } else return 0;
 }
+    */
 
 static int check_response(const struct response token_info, struct check_tokens *ct) {
     const char * const response_data = token_info.ptr;
     struct check_tokens *cti;
     int r, i = 1;
-    jsmn_parser p;
-    jsmntok_t t[128]; /* We expect no more than 128 tokens */
+    cJSON *p;
+    /* jsmntok_t t[128]; *//* We expect no more than 128 tokens */
 
+    /*
     jsmn_init(&p);
     if ((r = jsmn_parse(&p, response_data, token_info.len, t, sizeof(t)/sizeof(t[0]))) < 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Failed to parse tokeninfo JSON response");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
+    */
     /* Assume the top-level element is an object */
+    /*
     if (r-- < 1 || t[0].type != JSMN_OBJECT) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo response: JSON Object expected");
         return PAM_AUTHINFO_UNAVAIL;
@@ -80,7 +99,9 @@ static int check_response(const struct response token_info, struct check_tokens 
     while (r > 0) {
         if (t[i].type == JSMN_STRING) {
             --r;
+    */
             /* try to find "interesting" keys in the top-level element object */
+    /*
             for (cti = ct; cti->key != NULL; ++cti) {
                 if (cti->key_len == t[i].end - t[i].start &&
                         strncmp(response_data + t[i].start, cti->key, cti->key_len) == 0) {
@@ -98,7 +119,9 @@ static int check_response(const struct response token_info, struct check_tokens 
                 }
             }
 
+    */
             /* skip value, because key was not interesting for us */
+    /*
             if (cti->key == NULL) {
                 int skipped = skip_object(t + ++i, r);
                 r -= skipped; i += skipped;
@@ -116,13 +139,18 @@ static int check_response(const struct response token_info, struct check_tokens 
         if (cti->match == 0) {
             syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't find '%.*s' field in the tokeninfo JSON response object",
                 cti->key_len, cti->key);
-            if (cti == ct) {  /* login token field always come first */
+    */
+    /*
+            if (cti == ct) {  *//* login token field always come first */
+    /*
                 r = PAM_USER_UNKNOWN;
             } else if (r != PAM_USER_UNKNOWN) {
                 r = PAM_AUTH_ERR;
             }
         }
     }
+
+    */
 
     if (r == PAM_SUCCESS)
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: successfully authenticated '%.*s'", ct->value_len, ct->value);
@@ -197,16 +225,50 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     return ret;
 }
 
-static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
-    struct response token_info;
-    long response_code = 0;
+static int parse_authbearer(const char * const authbearer_decoded, struct st_authbearer *authbearer_parsed) {
     int ret;
+
+    return ret;
+}
+
+static int decode_authbearer(const char * const authbearer, const char *authbearer_decoded, int *authtok_len) {
+    int ret;
+    BIO *bio, *b64;
+    int authbearer_len = strlen(authbearer);
+
+    b64 = BIO_new(BIO_f_base64());
+    bio = BIO_new_mem_buf(authbearer, authbearer_len);
+    bio = BIO_push(b64, bio);
+
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // No newline handling
+    *authtok_len = BIO_read(bio, authbearer_decoded, authbearer_len);
+    BIO_free_all(bio);
+
+    return (*authtok_len > 0) ? 0 : -1;
+}
+
+static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authbearer, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
+    struct response token_info;
+    struct st_authbearer authbearer_parsed;
+    long response_code = 0;
+    const char *authtok, *authbearer_decoded;
+    int ret, authtok_len;
 
     if ((token_info.ptr = malloc(1)) == NULL) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
         return PAM_AUTHINFO_UNAVAIL;
     }
     token_info.ptr[token_info.len = 0] = '\0';
+
+    if (decode_authbearer(authbearer, authbearer_decoded, &authtok_len) != 0) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to decode authbearer");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    if (parse_authbearer(authbearer_decoded, &authbearer_parsed) != 0) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
 
     if (query_token_info(tokeninfo_url, authtok, client_id, client_secret, &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
@@ -223,8 +285,11 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tokeninfo_url = NULL, *authtok = NULL;
+    const char *tokeninfo_url = NULL, *authbearer = NULL;
     const char *client_id = NULL, *client_secret = NULL;
+    struct check_tokens ct[argc];
+    int i, ct_len = 1;
+    ct->key = ct->value = NULL;
 
     if (argc != 3) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 4 arguments (url, client_id, client_secret)");
@@ -250,12 +315,12 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    if (pam_get_authtok(pamh, PAM_AUTHTOK, &authtok, NULL) != PAM_SUCCESS || authtok == NULL || *authtok == '\0') {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get authtok");
+    if (pam_get_authtok(pamh, PAM_AUTHTOK, &authbearer, NULL) != PAM_SUCCESS || authbearer == NULL || *authbearer == '\0') {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get authbearer");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    return oauth2_authenticate(tokeninfo_url, authtok, client_id, client_secret);
+    return oauth2_authenticate(tokeninfo_url, authbearer, client_id, client_secret, ct);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {

@@ -17,7 +17,7 @@ PAM_DIR=$(LIBDIR)/security
 all: pam_oauth2.so
 
 pam_oauth2.so: pam_oauth2.o
-	$(CC) -shared $^ -lcurl -o $@
+	$(CC) -shared $^ -lcurl -lssl -lcrypto -o $@
 
 install: pam_oauth2.so
 	install -d $(DESTDIR)$(PAM_DIR)
