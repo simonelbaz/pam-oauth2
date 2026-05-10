@@ -231,7 +231,7 @@ static int parse_authbearer(const char * const authbearer_decoded, struct st_aut
     return ret;
 }
 
-static int decode_authbearer(const char * const authbearer, const char *authbearer_decoded, int *authtok_len) {
+static int decode_authbearer(const char * const authbearer, char *authbearer_decoded, int *authtok_len) {
     int ret;
     BIO *bio, *b64;
     int authbearer_len = strlen(authbearer);
@@ -240,7 +240,7 @@ static int decode_authbearer(const char * const authbearer, const char *authbear
     bio = BIO_new_mem_buf(authbearer, authbearer_len);
     bio = BIO_push(b64, bio);
 
-    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); // No newline handling
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); /* No newline handling */
     *authtok_len = BIO_read(bio, authbearer_decoded, authbearer_len);
     BIO_free_all(bio);
 
@@ -251,7 +251,8 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     struct response token_info;
     struct st_authbearer authbearer_parsed;
     long response_code = 0;
-    const char *authtok, *authbearer_decoded;
+    const char *authtok;
+    char *authbearer_decoded;
     int ret, authtok_len;
 
     if ((token_info.ptr = malloc(1)) == NULL) {
