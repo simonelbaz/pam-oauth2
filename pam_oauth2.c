@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
@@ -231,20 +232,27 @@ static int parse_authbearer(const char * const authbearer_decoded, struct st_aut
     return ret;
 }
 
-static int decode_authbearer(const char * const authbearer, char *authbearer_decoded, int *authtok_len) {
+static int decode_authbearer(const char * const authbearer, unsigned char **authbearer_decoded, int *authtok_len) {
     int ret;
     BIO *bio, *b64;
     int authbearer_len = strlen(authbearer);
 
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_to_decode '%s'", authbearer);
+
     b64 = BIO_new(BIO_f_base64());
-    bio = BIO_new_mem_buf(authbearer, authbearer_len);
+    bio = BIO_new_mem_buf(authbearer, -1);
     bio = BIO_push(b64, bio);
 
-    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); /* No newline handling */
-    *authtok_len = BIO_read(bio, authbearer_decoded, authbearer_len);
+    /* BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); *//* No newline handling */
+
+    *authtok_len = (authbearer_len * 3) / 4;
+    *authbearer_decoded = (unsigned char *)malloc(*authtok_len);
+
+    *authtok_len = BIO_read(bio, *authbearer_decoded, authbearer_len);
+
     BIO_free_all(bio);
 
-    return (*authtok_len > 0) ? 0 : -1;
+    return 0;
 }
 
 static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authbearer, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
@@ -252,8 +260,10 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     struct st_authbearer authbearer_parsed;
     long response_code = 0;
     const char *authtok;
-    char *authbearer_decoded;
+    unsigned char *authbearer_decoded;
     int ret, authtok_len;
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_oauth2 '%s'", authbearer);
 
     if ((token_info.ptr = malloc(1)) == NULL) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
@@ -261,10 +271,12 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
     token_info.ptr[token_info.len = 0] = '\0';
 
-    if (decode_authbearer(authbearer, authbearer_decoded, &authtok_len) != 0) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to decode authbearer");
+    if (decode_authbearer(authbearer, &authbearer_decoded, &authtok_len) < 0) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to decode authbearer '%s'", authbearer);
         return PAM_AUTHINFO_UNAVAIL;
     }
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_decoded '%s'", authbearer_decoded);
 
     if (parse_authbearer(authbearer_decoded, &authbearer_parsed) != 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
@@ -281,6 +293,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
 
     free(token_info.ptr);
+    free(authbearer_decoded);
 
     return ret;
 }
@@ -293,33 +306,46 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
     ct->key = ct->value = NULL;
 
     if (argc != 3) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 4 arguments (url, client_id, client_secret)");
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 3 arguments (url, client_id, client_secret)");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    tokeninfo_url = argv[0];
-    client_id = argv[1];
-    client_secret = argv[2];
+    tokeninfo_url = malloc(strlen(argv[0])+1);
+    strcpy(tokeninfo_url, argv[0]);
+
+    client_id = malloc(strlen(argv[1])+1);
+    strcpy(client_id, argv[1]);
+
+    client_secret = malloc(strlen(argv[2])+1);
+    strcpy(client_secret, argv[2]);
 
     if (tokeninfo_url == NULL || *tokeninfo_url == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo_url is not defined or invalid");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo_url '%s'", tokeninfo_url);
+
     if (client_id == NULL || *client_id == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_id is not defined or empty");
         return PAM_AUTHINFO_UNAVAIL;
     }
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_id '%s'", client_id);
 
     if (client_secret == NULL || *client_secret == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_secret is not defined or empty");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_secret '%s'", client_secret);
+
     if (pam_get_authtok(pamh, PAM_AUTHTOK, &authbearer, NULL) != PAM_SUCCESS || authbearer == NULL || *authbearer == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get authbearer");
         return PAM_AUTHINFO_UNAVAIL;
     }
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_pam '%s'", authbearer);
 
     return oauth2_authenticate(tokeninfo_url, authbearer, client_id, client_secret, ct);
 }
