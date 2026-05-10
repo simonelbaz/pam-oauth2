@@ -24,5 +24,5 @@ install: pam_oauth2.so
 	install -m 644 $< $(DESTDIR)$(PAM_DIR)
 
 clean:
-	$(MAKE) -C jsmn clean
+	$(MAKE) -C clean
 	rm -f *.o *.so

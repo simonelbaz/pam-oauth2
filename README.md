@@ -16,7 +16,7 @@ $ sudo make install
 ## Configuration
 
 ```
-auth sufficient pam_oauth2.so <tokeninfo url> <login field> key1=value2 key2=value2
+auth sufficient pam_oauth2.so <instrospect url> <client_id> <client_secret> <token>
 account sufficient pam_oauth2.so
 ```
 
@@ -25,32 +25,27 @@ account sufficient pam_oauth2.so
 Lets assume that configuration is looking like:
 
 ```
-auth sufficient pam_oauth2.so https://foo.org/oauth2/tokeninfo?access_token= uid grp=tester
+auth sufficient pam_oauth2.so https://foo.org/oauth2/introspect pamoauth2 mysecret
 ```
 
-And somebody is trying to login with login=foo and token=bar.
+And somebody is trying to login with token `mytoken`
 
-pam\_oauth2 module will make http request https://foo.org/oauth2/tokeninfo?access\_token=bar (tokeninfo url is simply concatenated with token) and check response code and content.
+pam\_oauth2 module will make http request:
+```
+curl -s -u pamoauth2:mysecret -X POST -d 'token=mytoken' 'https://foo.org/oauth2/introspect'
+```
 
 If the response code is not 200 - authentication will fail. After that it will check response content:
 
 ```json
 {
-  "access_token": "bar",
-  "expires_in": 3598,
-  "grp": "tester",
-  "scope": [
-    "uid"
-  ],
-  "token_type": "Bearer",
-  "uid": "foo"
+   "active" : true,
+   "client_id" : "pamoauth2",
+   "exp" : 1630684115,
+   "iss" : "https://foo.org/",
+   "scope" : "openid profile email",
+   "sub" : "dwho"
 }
-```
-
-It will check that response is a valid JSON object and top-level object contains following key-value pairs:
-```json
-  "uid": "foo",
-  "grp": "tester"
 ```
 
 If some keys haven't been found or values don't match with expectation - authentication will fail.

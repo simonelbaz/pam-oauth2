@@ -4,7 +4,7 @@
 #include <curl/curl.h>
 #include <security/pam_modules.h>
 #include <security/pam_ext.h>
-#include "jsmn/jsmn.h"
+#include "cJSON.h"
 
 struct response {
     char *ptr;
@@ -130,23 +130,54 @@ static int check_response(const struct response token_info, struct check_tokens 
     return r;
 }
 
-static int query_token_info(const char * const tokeninfo_url, const char * const authtok, long *response_code, struct response *token_info) {
+static int query_token_info(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, long *response_code, struct response *token_info) {
     int ret = 1;
-    char *url;
+    char *url, *userpassword;
+    int user_len = 0, password_len = 0;
     CURL *session = curl_easy_init();
+    curl_mime *mime;
+    curl_mimepart *part;
 
     if (!session) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't initialize curl");
         return ret;
     }
 
-    if ((url = malloc(strlen(tokeninfo_url) + strlen(authtok) + 1))) {
-        strcpy(url, tokeninfo_url);
-        strcat(url, authtok);
+    mime = curl_mime_init(session);
 
+    if (mime == NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cannot initialize mime");
+        return ret;
+    }
+
+    part = curl_mime_addpart(mime);
+
+    if (part == NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cannot initialize part");
+        return ret;
+    }
+
+    curl_mime_data(part, "", CURL_ZERO_TERMINATED);
+    curl_mime_name(part, "token");
+
+    if ((url = malloc(strlen(tokeninfo_url) + 1))) {
+        strcpy(url, tokeninfo_url);
+
+	user_len = strlen(client_id);
+	password_len = strlen(client_secret);
+
+	if ((userpassword = malloc(user_len + password_len + 1 + 1))) {
+		strncpy(userpassword, client_id, user_len );
+		strcat(userpassword, ":");
+		strncat(userpassword, client_secret, password_len);
+	}
+
+        /* Post and send it */
+        curl_easy_setopt(session, CURLOPT_MIMEPOST, mime);
         curl_easy_setopt(session, CURLOPT_URL, url);
-        curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, writefunc);
-        curl_easy_setopt(session, CURLOPT_WRITEDATA, token_info);
+
+        /* set username and password for the authentication */
+        curl_easy_setopt(session, CURLOPT_USERPWD, userpassword);
 
         if (curl_easy_perform(session) == CURLE_OK &&
                 curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code) == CURLE_OK) {
@@ -161,11 +192,12 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     }
 
     curl_easy_cleanup(session);
+    curl_mime_free(mime);
 
     return ret;
 }
 
-static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, struct check_tokens *ct) {
+static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
     struct response token_info;
     long response_code = 0;
     int ret;
@@ -176,7 +208,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
     token_info.ptr[token_info.len = 0] = '\0';
 
-    if (query_token_info(tokeninfo_url, authtok, &response_code, &token_info) != 0) {
+    if (query_token_info(tokeninfo_url, authtok, client_id, client_secret, &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
     } else if (response_code == 200) {
         ret = check_response(token_info, ct);
@@ -192,25 +224,29 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tokeninfo_url = NULL, *authtok = NULL;
-    struct check_tokens ct[argc];
-    int i, ct_len = 1;
-    ct->key = ct->value = NULL;
+    const char *client_id = NULL, *client_secret = NULL;
 
-    if (argc > 0) tokeninfo_url = argv[0];
-    if (argc > 1) ct[0].key = argv[1];
+    if (argc != 3) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 4 arguments (url, client_id, client_secret)");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    tokeninfo_url = argv[0];
+    client_id = argv[1];
+    client_secret = argv[2];
 
     if (tokeninfo_url == NULL || *tokeninfo_url == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo_url is not defined or invalid");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    if (ct->key == NULL || *ct->key == '\0') {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: login_field is not defined or empty");
+    if (client_id == NULL || *client_id == '\0') {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_id is not defined or empty");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    if (pam_get_user(pamh, &ct->value, NULL) != PAM_SUCCESS || ct->value == NULL || *ct->value == '\0') {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get user login");
+    if (client_secret == NULL || *client_secret == '\0') {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: client_secret is not defined or empty");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
@@ -219,23 +255,7 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    ct->key_len = strlen(ct->key);
-    ct->value_len = strlen(ct->value);
-    ct->match = 0;
-
-    for (i = 2; i < argc; ++i) {
-        const char *value = strchr(argv[i], '=');
-        if (value != NULL) {
-            ct[ct_len].key = argv[i];
-            ct[ct_len].key_len = value - argv[i];
-            ct[ct_len].value = value + 1;
-            ct[ct_len].value_len = strlen(value + 1);
-            ct[ct_len++].match = 0;
-        }
-    }
-    ct[ct_len].key = NULL;
-
-    return oauth2_authenticate(tokeninfo_url, authtok, ct);
+    return oauth2_authenticate(tokeninfo_url, authtok, client_id, client_secret);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
