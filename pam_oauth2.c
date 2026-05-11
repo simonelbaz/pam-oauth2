@@ -23,14 +23,11 @@ struct check_tokens {
 };
 
 struct st_authbearer {
-    char *a;
-    size_t a_len;
-    char *host;
-    size_t host_len;
-    char *port;
-    size_t port_len;
-    char *token;
-    size_t token_len;
+    char a[256];
+    char host[1024];
+    int port;
+    char bearer[1024];
+    char token[1024];
 };
 
 static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r) {
@@ -226,14 +223,63 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     return ret;
 }
 
+static int extract_token(struct st_authbearer *authbearer_parsed) {
+	int ret = 0;
+
+	return ret;
+}
+
 static int parse_authbearer(const char * const authbearer_decoded, struct st_authbearer *authbearer_parsed) {
-    int ret;
+    int ret = 0;
+    char *next;
+    char *left;
+    char *delim = "";
+
+    next = strtok(authbearer_decoded, delim);
+
+    if (next != NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: username '%s'", next);
+        strcpy(authbearer_parsed->a, next);
+    } else {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get username");
+        return 1;
+    }
+
+    next = strtok(NULL, delim);
+
+    if (next != NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: hostname '%s'", next);
+        strcpy(authbearer_parsed->host, next);
+    } else {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get hostname");
+        return 1;
+    }
+
+    next = strtok(NULL, delim);
+
+    if (next != NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: port '%s'", next);
+        authbearer_parsed->port = atoi(next);
+    } else {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get port");
+        return 1;
+    }
+
+    next = strtok(NULL, delim);
+
+    if (next != NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: bearer '%s'", next);
+        strcpy(authbearer_parsed->bearer, next);
+    } else {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get bearer");
+        return 1;
+    }
 
     return ret;
 }
 
-static int decode_authbearer(const char * const authbearer, unsigned char **authbearer_decoded, int *authtok_len) {
-    int ret;
+static int decode_authbearer(const char * const authbearer, unsigned char **authbearer_decoded) {
+    int ret = 0;
     BIO *bio, *b64;
     int authbearer_len = strlen(authbearer);
 
@@ -243,16 +289,15 @@ static int decode_authbearer(const char * const authbearer, unsigned char **auth
     bio = BIO_new_mem_buf(authbearer, -1);
     bio = BIO_push(b64, bio);
 
-    /* BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL); *//* No newline handling */
+    BIO_set_flags(bio, BIO_FLAGS_BASE64_NO_NL);/* No newline handling */
 
-    *authtok_len = (authbearer_len * 3) / 4;
-    *authbearer_decoded = (unsigned char *)malloc(*authtok_len);
+    *authbearer_decoded = (unsigned char *)malloc(authbearer_len);
 
-    *authtok_len = BIO_read(bio, *authbearer_decoded, authbearer_len);
+    ret = BIO_read(b64, *authbearer_decoded, authbearer_len);
 
     BIO_free_all(bio);
 
-    return 0;
+    return ret;
 }
 
 static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authbearer, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
@@ -271,7 +316,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
     token_info.ptr[token_info.len = 0] = '\0';
 
-    if (decode_authbearer(authbearer, &authbearer_decoded, &authtok_len) < 0) {
+    if (decode_authbearer(authbearer, &authbearer_decoded) < 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to decode authbearer '%s'", authbearer);
         return PAM_AUTHINFO_UNAVAIL;
     }
@@ -279,6 +324,11 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_decoded '%s'", authbearer_decoded);
 
     if (parse_authbearer(authbearer_decoded, &authbearer_parsed) != 0) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    if (extract_token(&authbearer_parsed) != 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
         return PAM_AUTHINFO_UNAVAIL;
     }
@@ -310,14 +360,9 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    tokeninfo_url = malloc(strlen(argv[0])+1);
-    strcpy(tokeninfo_url, argv[0]);
-
-    client_id = malloc(strlen(argv[1])+1);
-    strcpy(client_id, argv[1]);
-
-    client_secret = malloc(strlen(argv[2])+1);
-    strcpy(client_secret, argv[2]);
+    tokeninfo_url = argv[0];
+    client_id = argv[1];
+    client_secret = argv[2];
 
     if (tokeninfo_url == NULL || *tokeninfo_url == '\0') {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo_url is not defined or invalid");
