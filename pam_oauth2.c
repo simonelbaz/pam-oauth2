@@ -1,6 +1,8 @@
+#include <curl/system.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <syslog.h>
 #include <curl/curl.h>
 #include <security/pam_modules.h>
@@ -156,6 +158,42 @@ static int check_response(const struct response token_info, struct check_tokens 
     return r;
 }
 
+static int read_introspect_result(CURL *session, struct response *token_info, curl_off_t cl) {
+      int ret = 0;
+      char buf[256];
+      char raw_introspect[cl];
+      size_t nread, total_nread = 0;
+      curl_socket_t sockfd;
+      CURLcode result;
+ 
+      /* Extract the socket from the curl handle - we need it for waiting. */
+      result = curl_easy_getinfo(session, CURLINFO_ACTIVESOCKET, &sockfd);
+ 
+      /* read data */
+      result = curl_easy_recv(session, buf, sizeof(buf), &nread);
+
+      while (total_nread < cl) {
+        if (result == CURLE_OK) {
+	      total_nread += nread;
+	      strcpy(raw_introspect, buf);
+	      result = curl_easy_recv(session, buf, sizeof(buf), &nread);
+	} else if (result == CURLE_AGAIN) {
+              if ((ret = listen(sockfd, 10)) == 0) {
+	          result = curl_easy_recv(session, buf, sizeof(buf), &nread);
+	      } else {
+                  syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: listen failed");
+	      }
+	} else {
+		break;
+	}
+
+      }
+
+      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: raw_introspect '%s'", raw_introspect);
+
+      return ret;
+}
+
 static int query_token_info(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, long *response_code, struct response *token_info) {
     int ret = 1;
     char *url, *userpassword;
@@ -218,7 +256,15 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     errbuf[0] = 0;
 
     if ((ret = curl_easy_perform(session)) == CURLE_OK) { 
+	curl_off_t cl;
 	curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code); 
+	curl_easy_getinfo(session, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl); 
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: content-length '%ld'", cl);
+
+	if (cl > 0) {
+		read_introspect_result(session, token_info, cl);
+	}
+
     } else {
 	len = strlen(errbuf);
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: return_code: '%d'", ret);
