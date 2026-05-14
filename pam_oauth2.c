@@ -160,6 +160,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     int ret = 1;
     char *url, *userpassword;
     int user_len = 0, password_len = 0;
+    CURLcode result;
+    char errbuf[CURL_ERROR_SIZE];
+    size_t len;
     CURL *session = curl_easy_init();
     curl_mime *mime;
     curl_mimepart *part;
@@ -183,38 +186,51 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
         return ret;
     }
 
-    curl_mime_data(part, "", CURL_ZERO_TERMINATED);
+    curl_mime_data(part, authtok, strlen(authtok));
     curl_mime_name(part, "token");
 
-    if ((url = malloc(strlen(tokeninfo_url) + 1))) {
-        strcpy(url, tokeninfo_url);
+    user_len = strlen(client_id);
+    password_len = strlen(client_secret);
 
-	user_len = strlen(client_id);
-	password_len = strlen(client_secret);
+    if ((userpassword = malloc(user_len + password_len + 1 + 1))) {
+	  strncpy(userpassword, client_id, user_len );
+	  strcat(userpassword, ":");
+	  strncat(userpassword, client_secret, password_len);
+    }
 
-	if ((userpassword = malloc(user_len + password_len + 1 + 1))) {
-		strncpy(userpassword, client_id, user_len );
-		strcat(userpassword, ":");
-		strncat(userpassword, client_secret, password_len);
+    /* Post and send it */
+    curl_easy_setopt(session, CURLOPT_MIMEPOST, mime);
+    curl_easy_setopt(session, CURLOPT_URL, tokeninfo_url);
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: url '%s'", tokeninfo_url);
+
+    /* set username and password for the authentication */
+    curl_easy_setopt(session, CURLOPT_USERPWD, userpassword);
+
+    /* Set the default value: strict certificate check please (disable) */
+    curl_easy_setopt(session, CURLOPT_SSL_VERIFYPEER, 0L);
+
+    /* provide a buffer to store errors in */
+    curl_easy_setopt(session, CURLOPT_ERRORBUFFER, errbuf);
+ 
+    /* set the error buffer as empty before performing a request */
+    errbuf[0] = 0;
+
+    if ((ret = curl_easy_perform(session)) == CURLE_OK) { 
+	curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code); 
+    } else {
+	len = strlen(errbuf);
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: return_code: '%d'", ret);
+
+	if (len) {
+          syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: '%s%s'", errbuf,
+                ((errbuf[len - 1] != '\n') ? "\n" : ""));
+	}
+	else {
+          syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: strerror: '%s'", curl_easy_strerror(result));
 	}
 
-        /* Post and send it */
-        curl_easy_setopt(session, CURLOPT_MIMEPOST, mime);
-        curl_easy_setopt(session, CURLOPT_URL, url);
-
-        /* set username and password for the authentication */
-        curl_easy_setopt(session, CURLOPT_USERPWD, userpassword);
-
-        if (curl_easy_perform(session) == CURLE_OK &&
-                curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code) == CURLE_OK) {
-            ret = 0;
-        } else {
-            syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: failed to perform curl request");
-        }
-
-        free(url);
-    } else {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: failed to perform curl request");
     }
 
     curl_easy_cleanup(session);
@@ -223,10 +239,14 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     return ret;
 }
 
-static int extract_token(struct st_authbearer *authbearer_parsed) {
-	int ret = 0;
+static int extract_token(struct st_authbearer *authbearer_parsed, char **token) {
+    int ret = 0;
+    char *authBearer = "auth=Bearer";
 
-	return ret;
+    strcpy(*token, authbearer_parsed->bearer + strlen(authBearer));
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: token '%s'", *token);
+
+    return ret;
 }
 
 static int parse_authbearer(const char * const authbearer_decoded, struct st_authbearer *authbearer_parsed) {
@@ -304,8 +324,8 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     struct response token_info;
     struct st_authbearer authbearer_parsed;
     long response_code = 0;
-    const char *authtok;
     unsigned char *authbearer_decoded;
+    char *token = malloc(1024 * sizeof(char));
     int ret, authtok_len;
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_oauth2 '%s'", authbearer);
@@ -328,12 +348,12 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    if (extract_token(&authbearer_parsed) != 0) {
+    if (extract_token(&authbearer_parsed, &token) != 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
         return PAM_AUTHINFO_UNAVAIL;
     }
 
-    if (query_token_info(tokeninfo_url, authtok, client_id, client_secret, &response_code, &token_info) != 0) {
+    if (query_token_info(tokeninfo_url, token, client_id, client_secret, &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
     } else if (response_code == 200) {
         ret = check_response(token_info, ct);
