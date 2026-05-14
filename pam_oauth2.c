@@ -193,9 +193,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     password_len = strlen(client_secret);
 
     if ((userpassword = malloc(user_len + password_len + 1 + 1))) {
-	  strncpy(userpassword, client_id, user_len );
+	  strcpy(userpassword, client_id);
 	  strcat(userpassword, ":");
-	  strncat(userpassword, client_secret, password_len);
+	  strcat(userpassword, client_secret);
     }
 
     /* Post and send it */
@@ -203,6 +203,7 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     curl_easy_setopt(session, CURLOPT_URL, tokeninfo_url);
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: url '%s'", tokeninfo_url);
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: userpassword '%s'", userpassword);
 
     /* set username and password for the authentication */
     curl_easy_setopt(session, CURLOPT_USERPWD, userpassword);
@@ -243,7 +244,8 @@ static int extract_token(struct st_authbearer *authbearer_parsed, char **token) 
     int ret = 0;
     char *authBearer = "auth=Bearer";
 
-    strcpy(*token, authbearer_parsed->bearer + strlen(authBearer));
+    /* + 1 to step over space before token */
+    strcpy(*token, authbearer_parsed->bearer + strlen(authBearer) + 1);
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: token '%s'", *token);
 
     return ret;
