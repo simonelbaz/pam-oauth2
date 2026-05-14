@@ -236,6 +236,7 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
 
     curl_easy_cleanup(session);
     curl_mime_free(mime);
+    free(userpassword);
 
     return ret;
 }
@@ -244,6 +245,7 @@ static int extract_token(struct st_authbearer *authbearer_parsed, char **token) 
     int ret = 0;
     char *authBearer = "auth=Bearer";
 
+    *token = malloc(1024);
     /* + 1 to step over space before token */
     strcpy(*token, authbearer_parsed->bearer + strlen(authBearer) + 1);
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: token '%s'", *token);
@@ -327,7 +329,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     struct st_authbearer authbearer_parsed;
     long response_code = 0;
     unsigned char *authbearer_decoded;
-    char *token = malloc(1024 * sizeof(char));
+    char *token;
     int ret, authtok_len;
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_oauth2 '%s'", authbearer);
@@ -350,6 +352,9 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
         return PAM_AUTHINFO_UNAVAIL;
     }
 
+    /* free malloc memory before going further */
+    free(authbearer_decoded);
+
     if (extract_token(&authbearer_parsed, &token) != 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to parse authbearer");
         return PAM_AUTHINFO_UNAVAIL;
@@ -366,6 +371,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 
     free(token_info.ptr);
     free(authbearer_decoded);
+    free(token);
 
     return ret;
 }
