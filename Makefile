@@ -8,7 +8,8 @@ ifeq ($(shell if uname -o | grep -q "GNU/Linux" ; then echo true; else echo fals
 	    LIBDIR=/lib/$(DEB_HOST_MULTIARCH)
 	endif
     else ifeq ($(shell uname -m),x86_64)  # redhat?
-	LIBDIR=/lib64
+	#LIBDIR=/lib64
+	LIBDIR=/lib
     endif
 endif
 
@@ -16,7 +17,7 @@ PAM_DIR=$(LIBDIR)/security
 
 all: pam_oauth2.so
 
-pam_oauth2.so: pam_oauth2.o
+pam_oauth2.so: pam_oauth2.o cJSON.o
 	$(CC) -shared $^ -lcurl -lssl -lcrypto -o $@
 
 install: pam_oauth2.so

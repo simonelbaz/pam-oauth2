@@ -77,133 +77,74 @@ static int skip_object(const jsmntok_t *t, const int count) {
 static int check_response(const struct response token_info, struct check_tokens *ct) {
     const char * const response_data = token_info.ptr;
     struct check_tokens *cti;
-    int r, i = 1;
-    cJSON *p;
-    /* jsmntok_t t[128]; *//* We expect no more than 128 tokens */
+    int i = 1;
+    int status = 0;
+    cJSON *active = NULL;
+    cJSON *sub = NULL;
+    cJSON *p = NULL;
 
-    /*
-    jsmn_init(&p);
-    if ((r = jsmn_parse(&p, response_data, token_info.len, t, sizeof(t)/sizeof(t[0]))) < 0) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Failed to parse tokeninfo JSON response");
-        return PAM_AUTHINFO_UNAVAIL;
+    p = cJSON_Parse(response_data);
+
+    if (p == NULL) {
+	    const char *error_ptr = cJSON_GetErrorPtr();
+	    if (error_ptr != NULL) {
+              syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON '%s'", error_ptr);
+	    }
+	    status = 0;
+	    goto end;
     }
 
-    */
-    /* Assume the top-level element is an object */
-    /*
-    if (r-- < 1 || t[0].type != JSMN_OBJECT) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: tokeninfo response: JSON Object expected");
-        return PAM_AUTHINFO_UNAVAIL;
+    active = cJSON_GetObjectItemCaseSensitive(p, "active");
+    if (cJSON_IsString(active) && (active->valuestring != NULL)) {
+      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  active '%s'", active->valuestring);
     }
 
-    while (r > 0) {
-        if (t[i].type == JSMN_STRING) {
-            --r;
-    */
-            /* try to find "interesting" keys in the top-level element object */
-    /*
-            for (cti = ct; cti->key != NULL; ++cti) {
-                if (cti->key_len == t[i].end - t[i].start &&
-                        strncmp(response_data + t[i].start, cti->key, cti->key_len) == 0) {
-                    ++i;
-                    if (t[i].type == JSMN_STRING && cti->value_len == t[i].end - t[i].start &&
-                            strncmp(response_data + t[i].start, cti->value, cti->value_len) == 0) {
-                        ++i; --r;
-                        cti->match = 1;
-                        break;
-                    } else {
-                        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: '%.*s' value doesn't meet expectation: '%.*s' != '%.*s'",
-                            cti->key_len, cti->key, t[i].end - t[i].start, response_data + t[i].start, cti->value_len, cti->value);
-                        return PAM_AUTH_ERR;
-                    }
-                }
-            }
-
-    */
-            /* skip value, because key was not interesting for us */
-    /*
-            if (cti->key == NULL) {
-                int skipped = skip_object(t + ++i, r);
-                r -= skipped; i += skipped;
-            }
-        } else {
-            int skipped = skip_object(t + i, r);
-            r -= skipped; i += skipped;
-            skipped = skip_object(t + i, r);
-            r -= skipped; i += skipped;
-        }
-    }
-
-    r = PAM_SUCCESS;
-    for (cti = ct; cti->key != NULL; ++cti) {
-        if (cti->match == 0) {
-            syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't find '%.*s' field in the tokeninfo JSON response object",
-                cti->key_len, cti->key);
-    */
-    /*
-            if (cti == ct) {  *//* login token field always come first */
-    /*
-                r = PAM_USER_UNKNOWN;
-            } else if (r != PAM_USER_UNKNOWN) {
-                r = PAM_AUTH_ERR;
-            }
-        }
-    }
-
-    */
-
-    if (r == PAM_SUCCESS)
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: successfully authenticated '%.*s'", ct->value_len, ct->value);
-
-    return r;
+end:
+    cJSON_Delete(p);
+    return status;
 }
 
-static int read_introspect_result(CURL *session, struct response *token_info, curl_off_t cl) {
-      int ret = 0;
-      char buf[256];
-      char raw_introspect[cl];
-      size_t nread, total_nread = 0;
-      curl_socket_t sockfd;
-      CURLcode result;
+static size_t read_introspect_result(char *contents, size_t size, size_t nmemb, void *userdata) {
+  size_t realsize = size * nmemb;
+  struct response *mem = (struct response *)userdata;
  
-      /* Extract the socket from the curl handle - we need it for waiting. */
-      result = curl_easy_getinfo(session, CURLINFO_ACTIVESOCKET, &sockfd);
+  char *pointer = realloc(mem->ptr, mem->len + realsize + 1);
+  if(!pointer) {
+    /* out of memory! */
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: not enough memory (realloc returned NULL)");
+    return 0;
+  }
  
-      /* read data */
-      result = curl_easy_recv(session, buf, sizeof(buf), &nread);
-
-      while (total_nread < cl) {
-        if (result == CURLE_OK) {
-	      total_nread += nread;
-	      strcpy(raw_introspect, buf);
-	      result = curl_easy_recv(session, buf, sizeof(buf), &nread);
-	} else if (result == CURLE_AGAIN) {
-              if ((ret = listen(sockfd, 10)) == 0) {
-	          result = curl_easy_recv(session, buf, sizeof(buf), &nread);
-	      } else {
-                  syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: listen failed");
-	      }
-	} else {
-		break;
-	}
-
-      }
-
-      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: raw_introspect '%s'", raw_introspect);
-
-      return ret;
+  mem->ptr = pointer;
+  memcpy(&(mem->ptr[mem->len]), contents, realsize);
+  mem->len += realsize;
+  mem->ptr[mem->len] = 0;
+ 
+  return realsize;
 }
 
 static int query_token_info(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, long *response_code, struct response *token_info) {
-    int ret = 1;
+    int ret = 0;
     char *url, *userpassword;
     int user_len = 0, password_len = 0;
     CURLcode result;
     char errbuf[CURL_ERROR_SIZE];
     size_t len;
-    CURL *session = curl_easy_init();
     curl_mime *mime;
     curl_mimepart *part;
+
+    result = curl_global_init(CURL_GLOBAL_ALL);
+    if(result != CURLE_OK)
+      return (int)result;
+
+    CURL *session = curl_easy_init();
+
+    if ((token_info->ptr = malloc(1)) == NULL) {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    token_info->len = 0;
 
     if (!session) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't initialize curl");
@@ -252,6 +193,14 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     /* provide a buffer to store errors in */
     curl_easy_setopt(session, CURLOPT_ERRORBUFFER, errbuf);
  
+    /* set write callback */
+    curl_easy_setopt(session, CURLOPT_WRITEFUNCTION, read_introspect_result);
+    curl_easy_setopt(session, CURLOPT_WRITEDATA, (void *)token_info);
+
+    /* some servers do not like requests that are made without a user-agent
+       field, so we provide one */
+    curl_easy_setopt(session, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+ 
     /* set the error buffer as empty before performing a request */
     errbuf[0] = 0;
 
@@ -260,11 +209,8 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
 	curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code); 
 	curl_easy_getinfo(session, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl); 
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: content-length '%ld'", cl);
-
-	if (cl > 0) {
-		read_introspect_result(session, token_info, cl);
-	}
-
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: %lu bytes retrieved", (unsigned long)token_info->len);
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: retrieved message '%s'", (char *)token_info->ptr);
     } else {
 	len = strlen(errbuf);
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: return_code: '%d'", ret);
@@ -282,6 +228,9 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
 
     curl_easy_cleanup(session);
     curl_mime_free(mime);
+    curl_global_cleanup();
+
+    free(token_info->ptr);
     free(userpassword);
 
     return ret;
@@ -380,12 +329,6 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_oauth2 '%s'", authbearer);
 
-    if ((token_info.ptr = malloc(1)) == NULL) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
-        return PAM_AUTHINFO_UNAVAIL;
-    }
-    token_info.ptr[token_info.len = 0] = '\0';
-
     if (decode_authbearer(authbearer, &authbearer_decoded) < 0) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: unable to decode authbearer '%s'", authbearer);
         return PAM_AUTHINFO_UNAVAIL;
@@ -415,7 +358,6 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
         ret = PAM_AUTH_ERR;
     }
 
-    free(token_info.ptr);
     free(authbearer_decoded);
     free(token);
 
