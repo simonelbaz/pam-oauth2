@@ -16,7 +16,7 @@ $ sudo make install
 ## Configuration
 
 ```
-auth sufficient pam_oauth2.so <instrospect url> <client_id> <client_secret>
+auth sufficient pam_oauth2.so <introspect url> <client_id> <client_secret>
 account sufficient pam_oauth2.so
 ```
 
@@ -63,11 +63,13 @@ If the response code is not 200 - authentication will fail. After that it will c
 
 If some keys haven't been found or values don't match with expectation - authentication will fail.
 
+Tested with LemonLDAP::NG (https://lemonldap-ng.org/).
+
 ### Issues and Contributing
 
-Oauth2 PAM module welcomes questions via our [issues tracker](https://github.com/CyberDem0n/pam-oauth2/issues). We also greatly appreciate fixes, feature requests, and updates; before submitting a pull request, please visit our [contributor guidelines](https://github.com/CyberDem0n/pam-oauth2/blob/master/CONTRIBUTING.rst).
+Oauth2 PAM module welcomes questions via our [issues tracker](https://github.com/simonelbaz/pam-oauth2/issues). We also greatly appreciate fixes, feature requests, and updates; before submitting a pull request, please visit our [contributor guidelines](https://github.com/simonelbaz/pam-oauth2/blob/master/CONTRIBUTING.rst).
 
 License
 -------
 
-This project uses the [MIT license](https://github.com/CyberDem0n/pam-oauth2/blob/master/LICENSE).
+This project uses the [MIT license](https://github.com/simonelbaz/pam-oauth2/blob/master/LICENSE).
