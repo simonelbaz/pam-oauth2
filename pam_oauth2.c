@@ -1,4 +1,5 @@
 #include <curl/system.h>
+#include <security/_pam_types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,14 +17,6 @@ struct response {
     size_t len;
 };
 
-struct check_tokens {
-    const char *key;
-    int key_len;
-    const char *value;
-    int value_len;
-    int match;
-};
-
 struct st_authbearer {
     char a[256];
     char host[1024];
@@ -32,72 +25,41 @@ struct st_authbearer {
     char token[1024];
 };
 
-static size_t writefunc(void *ptr, size_t size, size_t nmemb, struct response *r) {
-    size_t data_size = size * nmemb;
-    size_t new_len = r->len + data_size;
-    char *new_ptr = realloc(r->ptr, new_len + 1);
-
-    if (new_ptr == NULL) {
-        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
-        return 0;
-    }
-
-    r->ptr = new_ptr;
-
-    memcpy(r->ptr + r->len, ptr, data_size);
-    r->ptr[r->len = new_len] = '\0';
-
-    return data_size;
-}
-
-/*
-static int skip_object(const jsmntok_t *t, const int count) {
-    int i;
-    if (count <= 0) return 0; *//* should not happen */
-
-    /*
-    if (t->type == JSMN_PRIMITIVE || t->type == JSMN_STRING) {
-        return 1;
-    } else if (t->type == JSMN_OBJECT) {
-        int ret = 1;
-        for (i = 0; i < t->size; ++i) {
-            ret += skip_object(t + ret, count - ret);
-            ret += skip_object(t + ret, count - ret);
-        }
-        return ret;
-    } else if (t->type == JSMN_ARRAY) {
-        int ret = 1;
-        for (i = 0; i < t->size; ++i)
-            ret += skip_object(t + ret, count - ret);
-        return ret;
-    } else return 0;
-}
-    */
-
-static int check_response(const struct response token_info, struct check_tokens *ct) {
-    const char * const response_data = token_info.ptr;
-    struct check_tokens *cti;
+static int check_response(struct response token_info, const char * const user) {
     int i = 1;
     int status = 0;
     cJSON *active = NULL;
     cJSON *sub = NULL;
     cJSON *p = NULL;
 
-    p = cJSON_Parse(response_data);
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: response_data '%s'", token_info.ptr);
+    
+    p = cJSON_Parse(token_info.ptr);
 
     if (p == NULL) {
 	    const char *error_ptr = cJSON_GetErrorPtr();
 	    if (error_ptr != NULL) {
               syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON '%s'", error_ptr);
 	    }
-	    status = 0;
+	    status = 1;
 	    goto end;
     }
 
     active = cJSON_GetObjectItemCaseSensitive(p, "active");
-    if (cJSON_IsString(active) && (active->valuestring != NULL)) {
-      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  active '%s'", active->valuestring);
+    if (cJSON_IsTrue(active)) {
+      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  active is True");
     }
+    else {
+      status = 2;
+      goto end;
+    }
+
+    sub = cJSON_GetObjectItemCaseSensitive(p, "sub");
+    if (cJSON_IsString(sub) && (sub->valuestring != NULL)) {
+      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  sub '%s'", sub->valuestring);
+    }
+
+    status = strcmp(user, sub->valuestring);
 
 end:
     cJSON_Delete(p);
@@ -230,7 +192,6 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     curl_mime_free(mime);
     curl_global_cleanup();
 
-    free(token_info->ptr);
     free(userpassword);
 
     return ret;
@@ -297,7 +258,7 @@ static int parse_authbearer(const char * const authbearer_decoded, struct st_aut
     return ret;
 }
 
-static int decode_authbearer(const char * const authbearer, unsigned char **authbearer_decoded) {
+static int decode_authbearer(const char * const authbearer, char **authbearer_decoded) {
     int ret = 0;
     BIO *bio, *b64;
     int authbearer_len = strlen(authbearer);
@@ -319,11 +280,11 @@ static int decode_authbearer(const char * const authbearer, unsigned char **auth
     return ret;
 }
 
-static int oauth2_authenticate(const char * const tokeninfo_url, const char * const authbearer, const char * const client_id, const char * const client_secret, struct check_tokens *ct) {
+static int oauth2_authenticate(const char * const tokeninfo_url, const char * const user, const char * const authbearer, const char * const client_id, const char * const client_secret) {
     struct response token_info;
     struct st_authbearer authbearer_parsed;
     long response_code = 0;
-    unsigned char *authbearer_decoded;
+    char *authbearer_decoded;
     char *token;
     int ret, authtok_len;
 
@@ -352,12 +313,13 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     if (query_token_info(tokeninfo_url, token, client_id, client_secret, &response_code, &token_info) != 0) {
         ret = PAM_AUTHINFO_UNAVAIL;
     } else if (response_code == 200) {
-        ret = check_response(token_info, ct);
+        ret = check_response(token_info, user);
     } else {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authentication failed with response_code=%li", response_code);
         ret = PAM_AUTH_ERR;
     }
 
+    free(token_info.ptr);
     free(authbearer_decoded);
     free(token);
 
@@ -365,11 +327,9 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 }
 
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
-    const char *tokeninfo_url = NULL, *authbearer = NULL;
+    const char *tokeninfo_url = NULL, *user = NULL, *authbearer = NULL;
     const char *client_id = NULL, *client_secret = NULL;
-    struct check_tokens ct[argc];
     int i, ct_len = 1;
-    ct->key = ct->value = NULL;
 
     if (argc != 3) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 3 arguments (url, client_id, client_secret)");
@@ -408,7 +368,14 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_pam '%s'", authbearer);
 
-    return oauth2_authenticate(tokeninfo_url, authbearer, client_id, client_secret, ct);
+    if (pam_get_user(pamh, &user, NULL) != PAM_SUCCESS || user == NULL || *user == '\0') {
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: can't get user");
+        return PAM_AUTHINFO_UNAVAIL;
+    }
+
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: user '%s'", user);
+
+    return oauth2_authenticate(tokeninfo_url, user, authbearer, client_id, client_secret);
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
