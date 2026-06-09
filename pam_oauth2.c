@@ -166,6 +166,8 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     /* set the error buffer as empty before performing a request */
     errbuf[0] = 0;
 
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: before curl_easy_perform");
+
     if ((ret = curl_easy_perform(session)) == CURLE_OK) { 
 	curl_off_t cl;
 	curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code); 
@@ -199,10 +201,16 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
 
 static int extract_token(struct st_authbearer *authbearer_parsed, char **token) {
     int ret = 0;
+    int len  = 0
     char *authBearer = "auth=Bearer";
 
     *token = malloc(1024);
+
     /* + 1 to step over space before token */
+    len = strlen(authbearer_parsed->bearer) + 1;
+
+    if (len < (strlen(authBearer) + 1)) return 1;
+
     strcpy(*token, authbearer_parsed->bearer + strlen(authBearer) + 1);
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: token '%s'", *token);
 
