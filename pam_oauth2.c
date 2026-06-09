@@ -26,7 +26,6 @@ struct st_authbearer {
 };
 
 static int check_response(struct response token_info, const char * const user) {
-    int i = 1;
     int status = 0;
     cJSON *active = NULL;
     cJSON *sub = NULL;
@@ -87,19 +86,20 @@ static size_t read_introspect_result(char *contents, size_t size, size_t nmemb, 
 
 static int query_token_info(const char * const tokeninfo_url, const char * const authtok, const char * const client_id, const char * const client_secret, long *response_code, struct response *token_info) {
     int ret = 0;
-    char *url, *userpassword;
+    char *userpassword;
     int user_len = 0, password_len = 0;
     CURLcode result;
     char errbuf[CURL_ERROR_SIZE];
     size_t len;
     curl_mime *mime;
     curl_mimepart *part;
+    CURL *session;
 
     result = curl_global_init(CURL_GLOBAL_ALL);
     if(result != CURLE_OK)
       return (int)result;
 
-    CURL *session = curl_easy_init();
+    session = curl_easy_init();
 
     if ((token_info->ptr = malloc(1)) == NULL) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: memory allocation failed");
@@ -201,7 +201,7 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
 
 static int extract_token(struct st_authbearer *authbearer_parsed, char **token) {
     int ret = 0;
-    int len  = 0
+    int len  = 0;
     char *authBearer = "auth=Bearer";
 
     *token = malloc(1024);
