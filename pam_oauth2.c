@@ -93,6 +93,7 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     size_t len;
     curl_mime *mime;
     curl_mimepart *part;
+    curl_off_t cl;
     CURL *session;
 
     result = curl_global_init(CURL_GLOBAL_ALL);
@@ -169,15 +170,15 @@ static int query_token_info(const char * const tokeninfo_url, const char * const
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: before curl_easy_perform");
 
     if ((ret = curl_easy_perform(session)) == CURLE_OK) { 
-	curl_off_t cl;
+        syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: return_code: '%d'", ret);
 	curl_easy_getinfo(session, CURLINFO_RESPONSE_CODE, response_code); 
 	curl_easy_getinfo(session, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &cl); 
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: content-length '%ld'", cl);
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: %lu bytes retrieved", (unsigned long)token_info->len);
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: retrieved message '%s'", (char *)token_info->ptr);
     } else {
-	len = strlen(errbuf);
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: return_code: '%d'", ret);
+	len = strlen(errbuf);
 
 	if (len) {
           syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: '%s%s'", errbuf,
