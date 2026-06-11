@@ -49,6 +49,7 @@ static int check_response(struct response token_info, const char * const user) {
       syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  active is True");
     }
     else {
+      syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: cJSON  active is False");
       status = 2;
       goto end;
     }
@@ -284,6 +285,8 @@ static int decode_authbearer(const char * const authbearer, char **authbearer_de
 
     ret = BIO_read(b64, *authbearer_decoded, authbearer_len);
 
+    syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: authbearer_decoded BIO '%s'", *authbearer_decoded);
+
     BIO_free_all(bio);
 
     return ret;
@@ -329,7 +332,6 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
     }
 
     free(token_info.ptr);
-    free(authbearer_decoded);
     free(token);
 
     return ret;
@@ -338,7 +340,7 @@ static int oauth2_authenticate(const char * const tokeninfo_url, const char * co
 PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, const char **argv) {
     const char *tokeninfo_url = NULL, *user = NULL, *authbearer = NULL;
     const char *client_id = NULL, *client_secret = NULL;
-    int i, ct_len = 1;
+    int i, ct_len = 1, ret = 0;
 
     if (argc != 3) {
         syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: Expects 3 arguments (url, client_id, client_secret)");
@@ -384,7 +386,15 @@ PAM_EXTERN int pam_sm_authenticate(pam_handle_t *pamh, int flags, int argc, cons
 
     syslog(LOG_AUTH|LOG_DEBUG, "pam_oauth2: user '%s'", user);
 
-    return oauth2_authenticate(tokeninfo_url, user, authbearer, client_id, client_secret);
+    ret =  oauth2_authenticate(tokeninfo_url, user, authbearer, client_id, client_secret);
+
+    if ( ret == 0 ) {
+	    ret = PAM_SUCCESS;
+    } else {
+	    ret = PAM_AUTH_ERR;
+    }
+
+    return ret;
 }
 
 PAM_EXTERN int pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv) {
